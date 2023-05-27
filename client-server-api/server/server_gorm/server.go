@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -47,24 +48,39 @@ func main() {
 
 func HandleCotacao(w http.ResponseWriter, r *http.Request) {
 
-	// time.Sleep(time.Second)
+	// time.Sleep(time.Second * 10)
 
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	ctxCliente := r.Context()
+
+	log.Println("Requisição iniciada...")
+	ctxServer, cancel := context.WithTimeout(ctxCliente, 200*time.Millisecond)
 	defer cancel()
 
-	req, err := http.Get(URL_SERVICE)
+	client := &http.Client{}
+	req, err := http.NewRequest(http.MethodGet, URL_SERVICE, nil)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "Erro ao criar requisição ao serviço de cotação: %v\n", err)
+		log.Println("Erro ao criar requisição ao serviço de cotação...")
+		return
+	}
+
+	log.Println("Executando requisição ao serviço de cotação...")
+	resp, err := client.Do(req.WithContext(ctxServer))
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Erro ao fazer requisição ao serviço de cotação: %v\n", err)
+		log.Println("Erro ao fazer requisição ao serviço de cotação...")
 		return
 	}
-	defer req.Body.Close()
+	defer resp.Body.Close()
 
-	res, err := io.ReadAll(req.Body)
+	log.Println("Lendo a resposta do serviço de cotação...")
+	res, err := io.ReadAll(resp.Body)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Erro ao ler resposta: %v\n", err)
+		log.Println("Erro ao ler resposta do serviço de cotação...")
 		return
 	}
 
@@ -73,29 +89,37 @@ func HandleCotacao(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Erro ao fazer parser da resposta: %v\n", err)
+		log.Println("Erro ao fazer parser da resposta...")
 		return
 	}
 
-	err = salvarCotacaoBD(&cotacao)
+	err = salvarCotacaoBD(ctxServer, &cotacao)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Erro ao salvar cotação: %v\n", err)
+		log.Println("Erro ao salvar cotação no BD...")
 		return
 	}
 
+	log.Println("Enviando resposta ao client...")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(cotacao.Usdbrl.Bid)
 }
 
-func salvarCotacaoBD(cotacao *CoinQuery) error {
+func salvarCotacaoBD(ctxParent context.Context, cotacao *CoinQuery) error {
+
+	ctxBD, cancel := context.WithTimeout(ctxParent, 10*time.Millisecond)
+	defer cancel()
+
 	db, err := gorm.Open(sqlite.Open("cotacao.db"), &gorm.Config{})
 	if err != nil {
 		return err
 	}
+	db = db.WithContext(ctxBD)
 
 	// Migrate the schema
-	db.AutoMigrate(&Coin{})
+	// db.AutoMigrate(&Coin{})
 
 	valor, err := strconv.ParseFloat(cotacao.Usdbrl.Bid, 64)
 	if err != nil {
@@ -109,7 +133,15 @@ func salvarCotacaoBD(cotacao *CoinQuery) error {
 		Valor:     valor,
 	}
 
-	db.Create(&coin)
+	result := db.Create(&coin)
+	if result.Error != nil {
+		if err == context.DeadlineExceeded {
+			log.Println("Timeout excedido no BD...")
+			return err
+		}
+
+		return err
+	}
 
 	return nil
 }

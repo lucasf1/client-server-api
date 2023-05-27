@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -29,14 +30,14 @@ func makeRequest() error {
 		return err
 	}
 
-	fmt.Println("Executando requisição...")
+	log.Println("Executando requisição...")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
 
-	fmt.Println("Lendo a resposta...")
+	log.Println("Lendo a resposta...")
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		return err
@@ -49,6 +50,7 @@ func makeRequest() error {
 	if err != nil {
 		return err
 	}
+	log.Printf("Resposta recebida: %.4f\n", bidValue)
 
 	err = saveBid(bidValue)
 	if err != nil {
@@ -60,19 +62,19 @@ func makeRequest() error {
 
 func saveBid(bidValue float64) error {
 
-	fmt.Println("Abrindo arquivo...")
+	log.Println("Abrindo arquivo...")
 	arquivo, err := os.OpenFile("cotacao.txt", os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
 	defer arquivo.Close()
 
-	fmt.Println("Escrevendo no arquivo...")
+	log.Println("Escrevendo no arquivo...")
 	n, err := arquivo.WriteString(fmt.Sprintf("Dólar: {%.4f}\n", bidValue))
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%d bytes writen\n", n)
+	log.Printf("%d bytes writen\n", n)
 
 	return nil
 }
