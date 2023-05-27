@@ -2,16 +2,15 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const URL_SERVICE = "https://economia.awesomeapi.com.br/json/last/USD-BRL"
@@ -33,8 +32,7 @@ type CoinQuery struct {
 }
 
 type Coin struct {
-	gorm.Model
-	ID        uint `gorm:"primaryKey"`
+	ID        uint
 	Code      string
 	CodeIn    string
 	Descricao string
@@ -48,20 +46,20 @@ func main() {
 
 func HandleCotacao(w http.ResponseWriter, r *http.Request) {
 
-	// time.Sleep(time.Second * 10)
-
 	ctxCliente := r.Context()
 
 	log.Println("Requisição iniciada...")
 	ctxServer, cancel := context.WithTimeout(ctxCliente, 200*time.Millisecond)
 	defer cancel()
 
+	// time.Sleep(time.Second * 10)
+
 	client := &http.Client{}
 	req, err := http.NewRequest(http.MethodGet, URL_SERVICE, nil)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Erro ao criar requisição ao serviço de cotação: %v\n", err)
-		log.Println("Erro ao criar requisição ao serviço de cotação...")
+		log.Println("Erro ao criar requisição ao serviço de cotação...:", err)
 		return
 	}
 
@@ -70,7 +68,7 @@ func HandleCotacao(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Erro ao fazer requisição ao serviço de cotação: %v\n", err)
-		log.Println("Erro ao fazer requisição ao serviço de cotação...")
+		log.Println("Erro ao fazer requisição ao serviço de cotação...:", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -80,7 +78,7 @@ func HandleCotacao(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Erro ao ler resposta: %v\n", err)
-		log.Println("Erro ao ler resposta do serviço de cotação...")
+		log.Println("Erro ao ler resposta do serviço de cotação...:", err)
 		return
 	}
 
@@ -89,7 +87,7 @@ func HandleCotacao(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Erro ao fazer parser da resposta: %v\n", err)
-		log.Println("Erro ao fazer parser da resposta...")
+		log.Println("Erro ao fazer parser da resposta...:", err)
 		return
 	}
 
@@ -97,7 +95,7 @@ func HandleCotacao(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Erro ao salvar cotação: %v\n", err)
-		log.Println("Erro ao salvar cotação no BD...")
+		log.Println("Erro ao salvar cotação no BD...:", err)
 		return
 	}
 
@@ -112,31 +110,25 @@ func salvarCotacaoBD(ctxParent context.Context, cotacao *CoinQuery) error {
 	ctxBD, cancel := context.WithTimeout(ctxParent, 10*time.Millisecond)
 	defer cancel()
 
-	db, err := gorm.Open(sqlite.Open("cotacao.db"), &gorm.Config{})
+	// time.Sleep(time.Second * 10)
+
+	db, err := sql.Open("sqlite3", "./cotacao.db")
 	if err != nil {
 		return err
 	}
-	db = db.WithContext(ctxBD)
+	defer db.Close()
 
-	// Migrate the schema
-	// db.AutoMigrate(&Coin{})
-
-	valor, err := strconv.ParseFloat(cotacao.Usdbrl.Bid, 64)
+	stmt, err := db.Prepare("INSERT INTO coins (code, code_in, descricao, valor) VALUES ($1, $2, $3, $4)")
 	if err != nil {
+		log.Println("Erro ao salvar cotação no BD...:", err)
 		return err
 	}
+	defer stmt.Close()
 
-	coin := Coin{
-		Code:      cotacao.Usdbrl.Code,
-		CodeIn:    cotacao.Usdbrl.Codein,
-		Descricao: cotacao.Usdbrl.Name,
-		Valor:     valor,
-	}
-
-	result := db.Create(&coin)
-	if result.Error != nil {
+	_, err = stmt.ExecContext(ctxBD, cotacao.Usdbrl.Code, cotacao.Usdbrl.Codein, cotacao.Usdbrl.Name, cotacao.Usdbrl.Bid)
+	if err != nil {
 		if err == context.DeadlineExceeded {
-			log.Println("Timeout excedido no BD...")
+			log.Println("Timeout excedido no BD...:", err)
 		}
 		return err
 	}
